@@ -54,11 +54,13 @@ class MainActivity : ComponentActivity() {
     private lateinit var logScroll: ScrollView
     private val uiLog = StringBuilder()
     private lateinit var progressBar: ProgressBar
-    private lateinit var addButton: Button
+    private lateinit var selectImagesButton: Button
+    private lateinit var selectVideosButton: Button
+    private lateinit var selectionSummaryText: TextView
     private lateinit var startButton: Button
     private val rows = mutableListOf<PairRow>()
-    private var nextPickTarget: PairRow? = null
-    private var pickingImage = true
+    private var selectedImageUris: List<Uri> = emptyList()
+    private var selectedVideoUris: List<Uri> = emptyList()
     private var currentIndex = 0
     private var completedCount = 0
     private var failedCount = 0
@@ -67,28 +69,26 @@ class MainActivity : ComponentActivity() {
     private val savedPaths = mutableListOf<String>()
     private val errorDetails = mutableListOf<String>()
 
-    private val imagePicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) {
-            persistPermission(uri)
-            nextPickTarget?.let {
-                it.imageUri = uri
-                it.imageName = displayName(uri)
-                it.imageLabel.text = "Ảnh: ${it.imageName}"
-            }
+    private val imagePicker = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNotEmpty()) {
+            uris.forEach { persistPermission(it) }
+            selectedImageUris = uris.distinctBy { it.toString() }
+            appendUiLog("Đã chọn ${selectedImageUris.size} ảnh theo thứ tự picker trả về.")
+            rebuildPairRows()
+        } else {
+            appendUiLog("Đã hủy chọn ảnh; danh sách ảnh trước đó được giữ nguyên.")
         }
-        nextPickTarget = null
     }
 
-    private val videoPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) {
-            persistPermission(uri)
-            nextPickTarget?.let {
-                it.videoUri = uri
-                it.videoName = displayName(uri)
-                it.videoLabel.text = "Video: ${it.videoName}"
-            }
+    private val videoPicker = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNotEmpty()) {
+            uris.forEach { persistPermission(it) }
+            selectedVideoUris = uris.distinctBy { it.toString() }
+            appendUiLog("Đã chọn ${selectedVideoUris.size} video theo thứ tự picker trả về.")
+            rebuildPairRows()
+        } else {
+            appendUiLog("Đã hủy chọn video; danh sách video trước đó được giữ nguyên.")
         }
-        nextPickTarget = null
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -96,7 +96,7 @@ class MainActivity : ComponentActivity() {
         outputDir = File(getExternalFilesDir(null), "exports")
         outputDir?.mkdirs()
         buildUi()
-        addPairRow()
+        rebuildPairRows()
     }
 
     private fun buildUi() {
@@ -128,13 +128,47 @@ class MainActivity : ComponentActivity() {
         page.addView(settings)
 
         val rowHeader = TextView(this).apply {
-            text = "Danh sách mapping 1–1"
+            text = "Chọn nhiều file một lần"
             textSize = 17f
             setTypeface(null, android.graphics.Typeface.BOLD)
             setTextColor(0xFF172033.toInt())
             setPadding(0, dp(14), 0, dp(6))
         }
         page.addView(rowHeader)
+        page.addView(TextView(this).apply {
+            text = "Bước 1: chọn N ảnh. Bước 2: chọn N video. App tự ghép ảnh số 1 với video số 1, ảnh số 2 với video số 2… theo thứ tự danh sách được trả về từ bộ chọn file."
+            textSize = 12f
+            setTextColor(0xFF566074.toInt())
+            setPadding(0, 0, 0, dp(6))
+        })
+
+        val pickButtons = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        selectImagesButton = Button(this).apply {
+            text = "Chọn nhiều ảnh"
+            setOnClickListener { if (!isRunning) imagePicker.launch(arrayOf("image/*")) }
+        }
+        selectVideosButton = Button(this).apply {
+            text = "Chọn nhiều video"
+            setOnClickListener { if (!isRunning) videoPicker.launch(arrayOf("video/*")) }
+        }
+        pickButtons.addView(selectImagesButton, LinearLayout.LayoutParams(0, -2, 1f).apply {
+            marginEnd = dp(4)
+        })
+        pickButtons.addView(selectVideosButton, LinearLayout.LayoutParams(0, -2, 1f).apply {
+            marginStart = dp(4)
+        })
+        page.addView(pickButtons)
+
+        selectionSummaryText = TextView(this).apply {
+            text = "Đã chọn: 0 ảnh • 0 video • 0 cặp"
+            textSize = 13f
+            setTextColor(0xFF30394B.toInt())
+            setPadding(0, dp(4), 0, dp(6))
+        }
+        page.addView(selectionSummaryText)
 
         val scroll = ScrollView(this)
         listContainer = LinearLayout(this).apply {
@@ -142,14 +176,6 @@ class MainActivity : ComponentActivity() {
         }
         scroll.addView(listContainer)
         page.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
-
-        addButton = Button(this).apply {
-            text = "+ Thêm cặp ảnh + video"
-            setOnClickListener { if (!isRunning) addPairRow() }
-        }
-        page.addView(addButton, LinearLayout.LayoutParams(-1, -2).apply {
-            topMargin = dp(8)
-        })
 
         startButton = Button(this).apply {
             text = "Tạo tất cả video"
@@ -214,103 +240,91 @@ class MainActivity : ComponentActivity() {
         appendUiLog("Ứng dụng khởi động. Android ${android.os.Build.VERSION.RELEASE} (SDK ${android.os.Build.VERSION.SDK_INT}).")
     }
 
-    private fun addPairRow() {
+    private fun rebuildPairRows() {
+        if (!::listContainer.isInitialized) return
+        rows.clear()
+        listContainer.removeAllViews()
+        val count = maxOf(selectedImageUris.size, selectedVideoUris.size)
+        for (index in 0 until count) addPairRow(index)
+
+        if (::selectionSummaryText.isInitialized) {
+            selectionSummaryText.text = "Đã chọn: ${selectedImageUris.size} ảnh • ${selectedVideoUris.size} video • $count cặp"
+            selectionSummaryText.setTextColor(
+                if (selectedImageUris.size == selectedVideoUris.size) 0xFF166534.toInt() else 0xFFB45309.toInt()
+            )
+        }
+        if (selectedImageUris.size != selectedVideoUris.size) {
+            statusText.text = "Số lượng chưa khớp: ${selectedImageUris.size} ảnh và ${selectedVideoUris.size} video. Hãy chọn bổ sung/thay lại để hai số lượng bằng nhau."
+        } else if (count > 0) {
+            statusText.text = "Đã tạo tự động $count cặp mapping theo thứ tự danh sách."
+        } else {
+            statusText.text = "Hãy chọn nhiều ảnh, sau đó chọn số lượng video tương ứng."
+        }
+    }
+
+    private fun addPairRow(index: Int) {
+        val imageUri = selectedImageUris.getOrNull(index)
+        val videoUri = selectedVideoUris.getOrNull(index)
+        val imageName = imageUri?.let { displayName(it) } ?: "chưa có ảnh"
+        val videoName = videoUri?.let { displayName(it) } ?: "chưa có video"
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(10), dp(10), dp(10), dp(10))
-            setBackgroundColor(0xFFFFFFFF.toInt())
-        }
-        val index = rows.size + 1
-        val top = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(10), dp(9), dp(10), dp(9))
+            setBackgroundColor(if (index % 2 == 0) 0xFFF4F6FA.toInt() else 0xFFFFFFFF.toInt())
         }
         val title = TextView(this).apply {
-            text = String.format(Locale.getDefault(), "Cặp %02d", index)
-            textSize = 16f
+            text = String.format(Locale.getDefault(), "Cặp %02d  (Ảnh %d ↔ Video %d)", index + 1, index + 1, index + 1)
+            textSize = 15f
             setTextColor(0xFF172033.toInt())
             setTypeface(null, android.graphics.Typeface.BOLD)
         }
-        val remove = Button(this).apply {
-            text = "Xóa"
-            setOnClickListener {
-                if (!isRunning) {
-                    val row = rows.firstOrNull { it.root === card }
-                    if (row != null) {
-                        rows.remove(row)
-                        listContainer.removeView(card)
-                        renumberRows()
-                    }
-                }
-            }
-        }
-        top.addView(title, LinearLayout.LayoutParams(0, -2, 1f))
-        top.addView(remove)
-        card.addView(top)
-
+        card.addView(title)
         val imageLabel = TextView(this).apply {
-            text = "Ảnh: chưa chọn"
-            textSize = 13f
-            setTextColor(0xFF566074.toInt())
+            text = "Ảnh ${index + 1}: $imageName"
+            textSize = 12f
+            setTextColor(if (imageUri != null) 0xFF1D4ED8.toInt() else 0xFFB45309.toInt())
             setPadding(0, dp(5), 0, dp(2))
         }
         card.addView(imageLabel)
-        val imageButton = Button(this).apply {
-            text = "Chọn ảnh"
-            setOnClickListener {
-                if (!isRunning) {
-                    nextPickTarget = rows.firstOrNull { it.root === card }
-                    pickingImage = true
-                    imagePicker.launch(arrayOf("image/*"))
-                }
-            }
-        }
-        card.addView(imageButton)
-
         val videoLabel = TextView(this).apply {
-            text = "Video: chưa chọn"
-            textSize = 13f
-            setTextColor(0xFF566074.toInt())
-            setPadding(0, dp(5), 0, dp(2))
+            text = "Video ${index + 1}: $videoName"
+            textSize = 12f
+            setTextColor(if (videoUri != null) 0xFF166534.toInt() else 0xFFB45309.toInt())
+            setPadding(0, dp(2), 0, dp(2))
         }
         card.addView(videoLabel)
-        val videoButton = Button(this).apply {
-            text = "Chọn video"
-            setOnClickListener {
-                if (!isRunning) {
-                    nextPickTarget = rows.firstOrNull { it.root === card }
-                    videoPicker.launch(arrayOf("video/*"))
-                }
-            }
-        }
-        card.addView(videoButton)
 
-        val row = PairRow(card, imageLabel, videoLabel)
+        val row = PairRow(
+            root = card,
+            imageLabel = imageLabel,
+            videoLabel = videoLabel,
+            imageUri = imageUri,
+            videoUri = videoUri,
+            imageName = imageName,
+            videoName = videoName
+        )
         rows.add(row)
         listContainer.addView(card, LinearLayout.LayoutParams(-1, -2).apply {
-            bottomMargin = dp(10)
+            bottomMargin = dp(6)
         })
-        renumberRows()
-    }
-
-    private fun renumberRows() {
-        rows.forEachIndexed { index, row ->
-            val top = row.root.getChildAt(0) as? LinearLayout
-            val label = top?.getChildAt(0) as? TextView
-            label?.text = String.format(Locale.getDefault(), "Cặp %02d", index + 1)
-        }
     }
 
     private fun startBatch() {
         if (isRunning) return
-        val validRows = rows.filter { it.imageUri != null || it.videoUri != null }
-        if (validRows.isEmpty()) {
-            toast("Hãy thêm ít nhất một cặp ảnh + video.")
+        if (selectedImageUris.isEmpty() || selectedVideoUris.isEmpty()) {
+            toast("Hãy chọn nhiều ảnh và nhiều video trước.")
             return
         }
-        val incomplete = validRows.indexOfFirst { it.imageUri == null || it.videoUri == null }
-        if (incomplete >= 0) {
-            toast("Cặp ${incomplete + 1} chưa có đủ ảnh và video.")
+        if (selectedImageUris.size != selectedVideoUris.size) {
+            val message = "Số lượng không khớp: ${selectedImageUris.size} ảnh và ${selectedVideoUris.size} video. Cần chọn số lượng bằng nhau."
+            statusText.text = message
+            appendUiLog(message)
+            toast(message)
+            return
+        }
+        val validRows = rows.toList()
+        if (validRows.isEmpty() || validRows.any { it.imageUri == null || it.videoUri == null }) {
+            toast("Chưa tạo đủ cặp mapping. Hãy kiểm tra danh sách ảnh và video.")
             return
         }
         val duplicateImages = validRows.mapNotNull { it.imageUri }.groupingBy { it.toString() }.eachCount().any { it.value > 1 }
@@ -333,7 +347,8 @@ class MainActivity : ComponentActivity() {
         savedPaths.clear()
         errorDetails.clear()
         startButton.isEnabled = false
-        addButton.isEnabled = false
+        selectImagesButton.isEnabled = false
+        selectVideosButton.isEnabled = false
         progressBar.max = validRows.size
         progressBar.progress = 0
         statusText.text = "Bắt đầu xử lý ${validRows.size} cặp…"
@@ -344,7 +359,8 @@ class MainActivity : ComponentActivity() {
         if (currentIndex >= jobs.size) {
             isRunning = false
             startButton.isEnabled = true
-            addButton.isEnabled = true
+            selectImagesButton.isEnabled = true
+            selectVideosButton.isEnabled = true
             val summary = StringBuilder()
                 .append("Hoàn tất: $completedCount video đã lưu, $failedCount video lỗi.")
                 .append("\nThư mục: Bộ nhớ trong/Movies/")
