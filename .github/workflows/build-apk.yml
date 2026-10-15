@@ -21,13 +21,9 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # Use the Android SDK already installed on GitHub's Ubuntu runner.
-      # Avoid android-actions/setup-android@v3 here because its current
-      # setup step attempts to install the removed SDK package named "tools".
       - name: Install Android SDK packages
         shell: bash
         run: |
-          echo "ANDROID_HOME=$ANDROID_HOME"
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           if [ ! -x "$SDKMANAGER" ]; then
             SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -path '*/bin/sdkmanager' -type f | sort -V | tail -n 1)"

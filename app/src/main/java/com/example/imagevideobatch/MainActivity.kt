@@ -425,6 +425,8 @@ class MainActivity : ComponentActivity() {
         return uri.lastPathSegment ?: "file"
     }
 
-    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
-    private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+    private fun dp(value: Int): Int = (value * this@MainActivity.getResources().displayMetrics.density).toInt()
+    private fun toast(message: String) {
+        Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
+    }
 }
