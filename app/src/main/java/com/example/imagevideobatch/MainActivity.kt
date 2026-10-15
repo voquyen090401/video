@@ -1,12 +1,15 @@
 package com.example.imagevideobatch
 
 import android.content.ContentValues
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
 import android.provider.MediaStore
 import android.view.Gravity
 import android.view.View
+import android.util.Log
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ProgressBar
@@ -28,6 +31,10 @@ import androidx.media3.transformer.Transformer
 import java.io.File
 import java.io.FileInputStream
 import java.io.IOException
+import java.io.PrintWriter
+import java.io.StringWriter
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 
 private data class PairRow(
@@ -43,6 +50,9 @@ private data class PairRow(
 class MainActivity : ComponentActivity() {
     private lateinit var listContainer: LinearLayout
     private lateinit var statusText: TextView
+    private lateinit var logText: TextView
+    private lateinit var logScroll: ScrollView
+    private val uiLog = StringBuilder()
     private lateinit var progressBar: ProgressBar
     private lateinit var addButton: Button
     private lateinit var startButton: Button
@@ -165,7 +175,43 @@ class MainActivity : ComponentActivity() {
         }
         page.addView(statusText)
 
+        val logHeader = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        logHeader.addView(TextView(this).apply {
+            text = "Nhật ký xử lý / lỗi chi tiết"
+            textSize = 15f
+            setTypeface(null, android.graphics.Typeface.BOLD)
+            setTextColor(0xFF172033.toInt())
+        }, LinearLayout.LayoutParams(0, -2, 1f))
+        logHeader.addView(Button(this).apply {
+            text = "Sao chép log"
+            setOnClickListener {
+                val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("ImageVideo log", uiLog.toString()))
+                toast("Đã sao chép log. Bạn có thể dán gửi lại cho mình.")
+            }
+        })
+        page.addView(logHeader)
+        logScroll = ScrollView(this).apply {
+            isFillViewport = true
+        }
+        logText = TextView(this).apply {
+            text = "Chưa có log. Khi có lỗi, thông tin và stack trace sẽ hiển thị ở đây."
+            textSize = 11f
+            setTextColor(0xFF202124.toInt())
+            setBackgroundColor(0xFFF1F3F4.toInt())
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            typeface = android.graphics.Typeface.MONOSPACE
+        }
+        logScroll.addView(logText)
+        page.addView(logScroll, LinearLayout.LayoutParams(-1, dp(150)).apply {
+            topMargin = dp(4)
+        })
+
         setContentView(page)
+        appendUiLog("Ứng dụng khởi động. Android ${android.os.Build.VERSION.RELEASE} (SDK ${android.os.Build.VERSION.SDK_INT}).")
     }
 
     private fun addPairRow() {
@@ -276,6 +322,10 @@ class MainActivity : ComponentActivity() {
 
         val dir = outputDir ?: File(getExternalFilesDir(null), "exports")
         dir.mkdirs()
+        uiLog.clear()
+        logText.text = ""
+        appendUiLog("Bắt đầu batch: ${validRows.size} cặp. Đích lưu: Bộ nhớ trong/Movies/.")
+        appendUiLog("Android SDK ${android.os.Build.VERSION.SDK_INT}; package=${packageName}")
         isRunning = true
         currentIndex = 0
         completedCount = 0
@@ -318,6 +368,7 @@ class MainActivity : ComponentActivity() {
         val imageUri = row.imageUri!!
         val videoUri = row.videoUri!!
         statusText.text = "Đang xử lý cặp $jobNumber/${jobs.size}…"
+        appendUiLog("Cặp $jobNumber/${jobs.size}: bắt đầu. imageUri=$imageUri; videoUri=$videoUri")
 
         try {
             val imageItem = MediaItem.Builder()
@@ -352,14 +403,18 @@ class MainActivity : ComponentActivity() {
 
             val sequence = EditedMediaItemSequence(listOf(still, clip))
             val composition = Composition.Builder(sequence).build()
+            appendUiLog("Cặp $jobNumber: tạo composition thành công (ảnh 8s + video 0-6s).")
 
             val temp = File(cacheDir, "batch_${System.currentTimeMillis()}_$jobNumber.mp4")
+            appendUiLog("Cặp $jobNumber: file tạm=${temp.absolutePath}")
             val transformer = Transformer.Builder(this)
                 .setVideoMimeType(MimeTypes.VIDEO_H264)
                 .addListener(object : Transformer.Listener {
                     override fun onCompleted(composition: Composition, exportResult: ExportResult) {
+                        appendUiLog("Cặp $jobNumber: Media3 báo export hoàn tất. tempExists=${temp.exists()}, bytes=${if (temp.exists()) temp.length() else -1L}")
                         try {
                             val saved = saveToGallery(temp, jobNumber)
+                            appendUiLog("Cặp $jobNumber: lưu và xác minh thành công: $saved")
                             savedPaths.add(saved)
                             completedCount++
                             progressBar.progress = jobNumber
@@ -367,7 +422,8 @@ class MainActivity : ComponentActivity() {
                         } catch (e: Exception) {
                             failedCount++
                             errorDetails.add("Cặp $jobNumber: ${e.message ?: e.javaClass.simpleName}")
-                            statusText.text = "Cặp $jobNumber lỗi khi lưu: ${e.message}"
+                            appendUiLog("Cặp $jobNumber: NGOẠI LỆ KHI LƯU", e)
+                            statusText.text = "Cặp $jobNumber lỗi khi lưu: ${e.javaClass.simpleName}: ${e.message}"
                         } finally {
                             temp.delete()
                             currentIndex++
@@ -382,6 +438,7 @@ class MainActivity : ComponentActivity() {
                     ) {
                         failedCount++
                         errorDetails.add("Cặp $jobNumber: ${exportException.message ?: exportException.javaClass.simpleName}")
+                        appendUiLog("Cặp $jobNumber: MEDIA3 EXPORT FAILED (type=${exportException.javaClass.name})", exportException)
                         temp.delete()
                         progressBar.progress = jobNumber
                         statusText.text = "Cặp $jobNumber thất bại: ${exportException.message}"
@@ -391,19 +448,23 @@ class MainActivity : ComponentActivity() {
                 })
                 .build()
 
+            appendUiLog("Cặp $jobNumber: gọi Transformer.start()")
             transformer.start(composition, temp.absolutePath)
+            appendUiLog("Cặp $jobNumber: Transformer.start() đã trả về.")
         } catch (e: Exception) {
             failedCount++
             errorDetails.add("Cặp $jobNumber: ${e.message ?: e.javaClass.simpleName}")
+            appendUiLog("Cặp $jobNumber: NGOẠI LỆ KHI KHỞI TẠO/XUẤT", e)
             progressBar.progress = jobNumber
-            statusText.text = "Cặp $jobNumber lỗi: ${e.message}"
+            statusText.text = "Cặp $jobNumber lỗi: ${e.javaClass.simpleName}: ${e.message}"
             currentIndex++
             processNext(jobs)
         }
     }
 
     private fun saveToGallery(temp: File, pairNumber: Int): String {
-        if (!temp.exists()) throw IOException("Không tìm thấy video tạm sau khi xuất")
+        appendUiLog("Cặp $pairNumber: bắt đầu lưu vào MediaStore Movies.")
+        if (!temp.exists()) throw IOException("Không tìm thấy video tạm sau khi xuất: ${temp.absolutePath}")
         val expectedBytes = temp.length()
         if (expectedBytes <= 0L) throw IOException("Video tạm có dung lượng 0 byte")
 
@@ -415,14 +476,17 @@ class MainActivity : ComponentActivity() {
             put(MediaStore.Video.Media.IS_PENDING, 1)
         }
         val resolver = contentResolver
+        appendUiLog("Cặp $pairNumber: insert MediaStore tên=$fileName, relativePath=Movies/.")
         val uri = resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
-            ?: throw IOException("Android không tạo được file trong thư viện Movies")
+            ?: throw IOException("Android không tạo được file trong thư viện Movies (MediaStore.insert trả null)")
+        appendUiLog("Cặp $pairNumber: MediaStore URI=$uri")
 
         try {
             val copiedBytes = resolver.openOutputStream(uri, "w")?.use { out ->
                 FileInputStream(temp).use { input -> input.copyTo(out) }
             } ?: throw IOException("Không mở được file đầu ra trong Movies")
 
+            appendUiLog("Cặp $pairNumber: copy xong $copiedBytes/$expectedBytes bytes.")
             if (copiedBytes <= 0L || copiedBytes != expectedBytes) {
                 throw IOException("Ghi file chưa đủ dữ liệu ($copiedBytes/$expectedBytes byte)")
             }
@@ -446,11 +510,15 @@ class MainActivity : ComponentActivity() {
                 val pending = if (pendingIndex >= 0) cursor.getInt(pendingIndex) else 0
                 if (savedSize <= 0L) throw IOException("File đã tạo nhưng thư viện báo dung lượng 0 byte")
                 if (pending != 0) throw IOException("File vẫn ở trạng thái chờ, chưa hiển thị trong Movies")
+                appendUiLog("Cặp $pairNumber: xác minh MediaStore OK; bytes=$savedSize, pending=$pending, uri=$uri")
             } ?: throw IOException("Không xác minh được file trong thư viện video")
 
             return "Bộ nhớ trong/Movies/$fileName"
         } catch (e: Exception) {
-            resolver.delete(uri, null, null)
+            appendUiLog("Cặp $pairNumber: lỗi trong saveToGallery; xóa entry MediaStore tạm. URI=$uri", e)
+            try { resolver.delete(uri, null, null) } catch (deleteError: Exception) {
+                appendUiLog("Không xóa được entry MediaStore sau lỗi.", deleteError)
+            }
             throw e
         }
     }
@@ -475,6 +543,38 @@ class MainActivity : ComponentActivity() {
             }
         }
         return uri.lastPathSegment ?: "file"
+    }
+
+    private fun appendUiLog(message: String, error: Throwable? = null) {
+        val stamp = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault()).format(Date())
+        val detail = buildString {
+            append("[").append(stamp).append("] ").append(message)
+            if (error != null) {
+                append("\nType: ").append(error.javaClass.name)
+                append("\nMessage: ").append(error.message ?: "(không có message)")
+                val sw = StringWriter()
+                error.printStackTrace(PrintWriter(sw))
+                append("\n").append(sw.toString())
+                var cause = error.cause
+                var depth = 0
+                while (cause != null && cause !== error && depth < 8) {
+                    append("\nCaused by [").append(depth + 1).append("]: ")
+                        .append(cause.javaClass.name).append(": ").append(cause.message)
+                    cause = cause.cause
+                    depth++
+                }
+            }
+        }
+        Log.e("ImageVideoBatch", detail)
+        runOnUiThread {
+            uiLog.append(detail).append("\n\n")
+            // Keep the panel responsive if a provider returns an extremely long stack trace.
+            if (uiLog.length > 40000) uiLog.delete(0, uiLog.length - 30000)
+            if (::logText.isInitialized) {
+                logText.text = uiLog.toString()
+                if (::logScroll.isInitialized) logScroll.post { logScroll.fullScroll(View.FOCUS_DOWN) }
+            }
+        }
     }
 
     private fun dp(value: Int): Int = (value * this@MainActivity.getResources().displayMetrics.density).toInt()
