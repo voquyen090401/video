@@ -3,6 +3,7 @@ package com.example.imagevideobatch
 import android.content.ContentValues
 import android.net.Uri
 import android.os.Bundle
+import android.os.Environment
 import android.provider.MediaStore
 import android.view.Gravity
 import android.view.View
@@ -53,6 +54,8 @@ class MainActivity : ComponentActivity() {
     private var failedCount = 0
     private var isRunning = false
     private var outputDir: File? = null
+    private val savedPaths = mutableListOf<String>()
+    private val errorDetails = mutableListOf<String>()
 
     private val imagePicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
@@ -277,6 +280,8 @@ class MainActivity : ComponentActivity() {
         currentIndex = 0
         completedCount = 0
         failedCount = 0
+        savedPaths.clear()
+        errorDetails.clear()
         startButton.isEnabled = false
         addButton.isEnabled = false
         progressBar.max = validRows.size
@@ -290,8 +295,21 @@ class MainActivity : ComponentActivity() {
             isRunning = false
             startButton.isEnabled = true
             addButton.isEnabled = true
-            statusText.text = "Hoàn tất: $completedCount thành công, $failedCount thất bại."
-            toast("Hoàn tất. Video được lưu trong Bộ nhớ trong/Movies.")
+            val summary = StringBuilder()
+                .append("Hoàn tất: $completedCount video đã lưu, $failedCount video lỗi.")
+                .append("\nThư mục: Bộ nhớ trong/Movies/")
+            if (savedPaths.isNotEmpty()) {
+                summary.append("\nFile mới nhất: ").append(savedPaths.last())
+            }
+            if (errorDetails.isNotEmpty()) {
+                summary.append("\nChi tiết lỗi: ").append(errorDetails.last())
+            }
+            statusText.text = summary.toString()
+            if (failedCount == 0) {
+                toast("Đã lưu $completedCount video vào Bộ nhớ trong/Movies.")
+            } else {
+                toast("Đã lưu $completedCount video; $failedCount video lỗi. Xem chi tiết trên màn hình.")
+            }
             return
         }
 
@@ -342,11 +360,13 @@ class MainActivity : ComponentActivity() {
                     override fun onCompleted(composition: Composition, exportResult: ExportResult) {
                         try {
                             val saved = saveToGallery(temp, jobNumber)
+                            savedPaths.add(saved)
                             completedCount++
                             progressBar.progress = jobNumber
-                            statusText.text = "Cặp $jobNumber/${jobs.size} hoàn tất: $saved"
+                            statusText.text = "Cặp $jobNumber/${jobs.size} đã lưu: $saved"
                         } catch (e: Exception) {
                             failedCount++
+                            errorDetails.add("Cặp $jobNumber: ${e.message ?: e.javaClass.simpleName}")
                             statusText.text = "Cặp $jobNumber lỗi khi lưu: ${e.message}"
                         } finally {
                             temp.delete()
@@ -361,6 +381,7 @@ class MainActivity : ComponentActivity() {
                         exportException: ExportException
                     ) {
                         failedCount++
+                        errorDetails.add("Cặp $jobNumber: ${exportException.message ?: exportException.javaClass.simpleName}")
                         temp.delete()
                         progressBar.progress = jobNumber
                         statusText.text = "Cặp $jobNumber thất bại: ${exportException.message}"
@@ -373,6 +394,7 @@ class MainActivity : ComponentActivity() {
             transformer.start(composition, temp.absolutePath)
         } catch (e: Exception) {
             failedCount++
+            errorDetails.add("Cặp $jobNumber: ${e.message ?: e.javaClass.simpleName}")
             progressBar.progress = jobNumber
             statusText.text = "Cặp $jobNumber lỗi: ${e.message}"
             currentIndex++
@@ -381,26 +403,56 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun saveToGallery(temp: File, pairNumber: Int): String {
+        if (!temp.exists()) throw IOException("Không tìm thấy video tạm sau khi xuất")
+        val expectedBytes = temp.length()
+        if (expectedBytes <= 0L) throw IOException("Video tạm có dung lượng 0 byte")
+
+        val fileName = "ImageVideo_${System.currentTimeMillis()}_${pairNumber}.mp4"
         val values = ContentValues().apply {
-            put(MediaStore.Video.Media.DISPLAY_NAME, "ImageVideo_${System.currentTimeMillis()}_${pairNumber}.mp4")
+            put(MediaStore.Video.Media.DISPLAY_NAME, fileName)
             put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
-            put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/")
+            put(MediaStore.Video.Media.RELATIVE_PATH, "${Environment.DIRECTORY_MOVIES}/")
             put(MediaStore.Video.Media.IS_PENDING, 1)
         }
         val resolver = contentResolver
         val uri = resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
-            ?: throw IOException("Không tạo được file trong thư viện video")
+            ?: throw IOException("Android không tạo được file trong thư viện Movies")
+
         try {
-            resolver.openOutputStream(uri)?.use { out ->
+            val copiedBytes = resolver.openOutputStream(uri, "w")?.use { out ->
                 FileInputStream(temp).use { input -> input.copyTo(out) }
-            } ?: throw IOException("Không mở được file đầu ra")
+            } ?: throw IOException("Không mở được file đầu ra trong Movies")
+
+            if (copiedBytes <= 0L || copiedBytes != expectedBytes) {
+                throw IOException("Ghi file chưa đủ dữ liệu ($copiedBytes/$expectedBytes byte)")
+            }
+
             val done = ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }
-            resolver.update(uri, done, null, null)
+            val updated = resolver.update(uri, done, null, null)
+            if (updated <= 0) throw IOException("Đã ghi file nhưng không thể công khai file trong Movies")
+
+            // Verify the saved MediaStore entry is visible and has non-zero size.
+            val projection = arrayOf(
+                MediaStore.Video.Media.DISPLAY_NAME,
+                MediaStore.Video.Media.SIZE,
+                MediaStore.Video.Media.RELATIVE_PATH,
+                MediaStore.Video.Media.IS_PENDING
+            )
+            resolver.query(uri, projection, null, null, null)?.use { cursor ->
+                if (!cursor.moveToFirst()) throw IOException("Không tìm thấy file vừa lưu trong thư viện video")
+                val sizeIndex = cursor.getColumnIndex(MediaStore.Video.Media.SIZE)
+                val pendingIndex = cursor.getColumnIndex(MediaStore.Video.Media.IS_PENDING)
+                val savedSize = if (sizeIndex >= 0) cursor.getLong(sizeIndex) else -1L
+                val pending = if (pendingIndex >= 0) cursor.getInt(pendingIndex) else 0
+                if (savedSize <= 0L) throw IOException("File đã tạo nhưng thư viện báo dung lượng 0 byte")
+                if (pending != 0) throw IOException("File vẫn ở trạng thái chờ, chưa hiển thị trong Movies")
+            } ?: throw IOException("Không xác minh được file trong thư viện video")
+
+            return "Bộ nhớ trong/Movies/$fileName"
         } catch (e: Exception) {
             resolver.delete(uri, null, null)
             throw e
         }
-        return "Movies"
     }
 
     private fun persistPermission(uri: Uri) {
