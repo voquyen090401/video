@@ -291,7 +291,7 @@ class MainActivity : ComponentActivity() {
             startButton.isEnabled = true
             addButton.isEnabled = true
             statusText.text = "Hoàn tất: $completedCount thành công, $failedCount thất bại."
-            toast("Hoàn tất. Video được lưu trong Movies/ImageVideoBatch.")
+            toast("Hoàn tất. Video được lưu trong Bộ nhớ trong/Movies.")
             return
         }
 
@@ -384,7 +384,7 @@ class MainActivity : ComponentActivity() {
         val values = ContentValues().apply {
             put(MediaStore.Video.Media.DISPLAY_NAME, "ImageVideo_${System.currentTimeMillis()}_${pairNumber}.mp4")
             put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
-            put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/ImageVideoBatch")
+            put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/")
             put(MediaStore.Video.Media.IS_PENDING, 1)
         }
         val resolver = contentResolver
@@ -400,7 +400,7 @@ class MainActivity : ComponentActivity() {
             resolver.delete(uri, null, null)
             throw e
         }
-        return "Movies/ImageVideoBatch"
+        return "Movies"
     }
 
     private fun persistPermission(uri: Uri) {

@@ -12,7 +12,7 @@ TÍNH NĂNG
 - 8 giây đầu là ảnh tĩnh.
 - 6 giây cuối lấy 6 giây đầu của video nguồn.
 - Xuất MP4 9:16, 1080x1920, 30 FPS, H.264, không âm thanh.
-- Lưu kết quả trong thư viện video: Movies/ImageVideoBatch.
+- Lưu kết quả trong thư viện video: Movies.
 
 MỞ VÀ BUILD APK
 1. Trên máy tính Windows, cài Android Studio:
