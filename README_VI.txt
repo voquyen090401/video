@@ -37,3 +37,6 @@ GHI CHÚ KỸ THUẬT
 - Hình ảnh/video được cắt giữa để lấp khung dọc; phần rìa có thể bị cắt.
 - Video ngắn hơn 6 giây có thể không đáp ứng đủ độ dài với cách cắt này; nên dùng video ít nhất 6 giây.
 - Không yêu cầu quyền truy cập toàn bộ bộ nhớ; người dùng chọn file qua Android document picker.
+
+
+BẢN CHẨN ĐOÁN LỖI: Màn hình có mục “Nhật ký xử lý / lỗi chi tiết”. Khi lỗi xảy ra, xem loại ngoại lệ, message và stack trace; nhấn “Sao chép log” để copy gửi hỗ trợ.

@@ -392,6 +392,9 @@ class MainActivity : ComponentActivity() {
             )
 
             val still = EditedMediaItem.Builder(imageItem)
+                // Media3 requires an explicit frame rate for still-image inputs.
+                // Without this, ImageAssetLoader throws IllegalStateException before export starts.
+                .setFrameRate(30)
                 .setRemoveAudio(true)
                 .setEffects(cropEffects)
                 .build()

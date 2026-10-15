@@ -15,3 +15,6 @@ Trong repository `voquyen090401/video`, thay file:
 bằng file cùng đường dẫn trong ZIP này. Giữ nguyên workflow build đã sửa. Commit rồi chạy lại Actions và tải artifact `ImageVideoBatch-debug-apk`.
 
 Lưu ý: APK debug build trên GitHub có thể được ký bằng debug key khác mỗi lần chạy. Nếu Android báo không thể cập nhật ứng dụng do xung đột chữ ký, hãy gỡ bản cũ rồi cài APK mới (việc gỡ ứng dụng có thể xóa dữ liệu ứng dụng, nhưng không nên xóa video đã xuất trong Movies).
+
+
+BẢN CHẨN ĐOÁN LỖI: Màn hình có mục “Nhật ký xử lý / lỗi chi tiết”. Khi lỗi xảy ra, xem loại ngoại lệ, message và stack trace; nhấn “Sao chép log” để copy gửi hỗ trợ.
